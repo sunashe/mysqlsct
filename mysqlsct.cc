@@ -4,14 +4,14 @@
  * @date 9/13/22
  * @version 0.0.1
  **/
-#include <getopt.h>
-#include <mysql/mysql.h>
-#include <unistd.h>
 #include <atomic>
 #include <cstring>
+#include <getopt.h>
 #include <iostream>
+#include <mysql/mysql.h>
 #include <string>
 #include <thread>
+#include <unistd.h>
 
 #define MYSQLSCT_VERSION "0.0.1"
 
@@ -24,7 +24,6 @@ std::atomic<uint64_t> processed_times{0};
 
 static char *user = nullptr;
 static char *password = nullptr;
-static char *db = nullptr;
 static char *database = nullptr;
 std::string table_name_prefix = "sct";
 
@@ -37,21 +36,23 @@ static uint table_cnt = 1;
 static uint64_t concurrency = 1;
 static uint64_t table_size = 1000;
 static uint64_t iterations = 100000;
-static uint64_t report_interval = 1;  // s
+static uint64_t report_interval = 1; // s
 static uint detail_log = 0;
-static uint64_t sleep_after_sct_failed = 0;  // s
+static uint64_t sleep_after_sct_failed = 1000; // s
 static uint select_after_insert = 0;
+static uint short_connection = 0;
 
 void usage();
 static const struct option long_options[] = {
-    {"version", 0, nullptr, 'v'},    {"help", 0, nullptr, '?'},
-    {"host-rw", 1, nullptr, 'h'},    {"host-ro", 1, nullptr, 'H'},
-    {"database", 1, nullptr, 'D'},   {"port-rw", 1, nullptr, 'P'},
-    {"port-ro", 1, nullptr, 'O'},    {"user", 1, nullptr, 'u'},
-    {"password", 1, nullptr, 'p'},   {"iterations", 1, nullptr, 'i'},
-    {"table-cnt", 1, nullptr, 'T'},  {"table-size", 1, nullptr, 't'},
-    {"sc-gap-us", 1, nullptr, 's'},  {"report-interval", 1, nullptr, 'r'},
-    {"detail-log", 1, nullptr, 'k'}, {"concurrency", 1, nullptr, 'c'},
+    {"version", 0, nullptr, 'v'},          {"help", 0, nullptr, '?'},
+    {"host-rw", 1, nullptr, 'h'},          {"host-ro", 1, nullptr, 'H'},
+    {"database", 1, nullptr, 'D'},         {"port-rw", 1, nullptr, 'P'},
+    {"port-ro", 1, nullptr, 'O'},          {"user", 1, nullptr, 'u'},
+    {"password", 1, nullptr, 'p'},         {"iterations", 1, nullptr, 'i'},
+    {"table-cnt", 1, nullptr, 'T'},        {"table-size", 1, nullptr, 't'},
+    {"sc-gap-us", 1, nullptr, 's'},        {"report-interval", 1, nullptr, 'r'},
+    {"detail-log", 1, nullptr, 'k'},       {"concurrency", 1, nullptr, 'c'},
+    {"short-connection", 1, nullptr, 'S'},
 };
 
 void free_option() {
@@ -88,76 +89,80 @@ bool parse_option(int argc, char *argv[]) {
     return false;
   }
 
-  while ((opt = getopt_long(argc, argv, "?vH:h:D:P:O:i:T:t:s:r:u:p:c:k:",
+  while ((opt = getopt_long(argc, argv, "?vH:h:D:P:O:i:T:t:s:r:u:p:c:k:S:",
                             long_options, nullptr)) != -1) {
     switch (opt) {
-      case '?':
-        usage();
-        return false;
-      case 'v':
-        cout << MYSQLSCT_VERSION << endl;
-        return false;
+    case 'S':
+      short_connection = atoi(optarg);
+      break;
 
-      case 'h':
-        host_rw = strdup(optarg);
-        break;
+    case '?':
+      usage();
+      return false;
+    case 'v':
+      cout << MYSQLSCT_VERSION << endl;
+      return false;
 
-      case 'H':
-        host_ro = strdup(optarg);
-        break;
+    case 'h':
+      host_rw = strdup(optarg);
+      break;
 
-      case 'D':
-        database = strdup(optarg);
-        break;
+    case 'H':
+      host_ro = strdup(optarg);
+      break;
 
-      case 'P':
-        port_rw = atoi(optarg);
-        break;
+    case 'D':
+      database = strdup(optarg);
+      break;
 
-      case 'O':
-        port_ro = atoi(optarg);
-        break;
+    case 'P':
+      port_rw = atoi(optarg);
+      break;
 
-      case 'i':
-        iterations = atoll(optarg);
-        break;
+    case 'O':
+      port_ro = atoi(optarg);
+      break;
 
-      case 'T':
-        table_cnt = atoi(optarg);
-        break;
+    case 'i':
+      iterations = atoll(optarg);
+      break;
 
-      case 't':
-        table_size = atoi(optarg);
-        break;
+    case 'T':
+      table_cnt = atoi(optarg);
+      break;
 
-      case 's':
-        sc_gap_us = atoi(optarg);
-        break;
+    case 't':
+      table_size = atoi(optarg);
+      break;
 
-      case 'r':
-        report_interval = atoi(optarg);
-        break;
+    case 's':
+      sc_gap_us = atoi(optarg);
+      break;
 
-      case 'u':
-        user = strdup(optarg);
-        break;
+    case 'r':
+      report_interval = atoi(optarg);
+      break;
 
-      case 'p':
-        password = strdup(optarg);
-        break;
+    case 'u':
+      user = strdup(optarg);
+      break;
 
-      case 'c':
-        concurrency = atoi(optarg);
-        break;
+    case 'p':
+      password = strdup(optarg);
+      break;
 
-      case 'k':
-        detail_log = atoi(optarg);
-        break;
+    case 'c':
+      concurrency = atoi(optarg);
+      break;
 
-      default:
-        cout << "parse argument failed" << endl;
-        usage();
-        return false;
+    case 'k':
+      detail_log = atoi(optarg);
+      break;
+
+    default:
+      cout << "parse argument failed" << endl;
+      usage();
+      return false;
     }
   }
 
@@ -183,6 +188,7 @@ void usage() {
           "statistics with a specified interval in seconds.\n";
   cout << "-k	--detail-log	print detail error log.\n";
   cout << "-c	--concurrency	number of threads to use.\n";
+  cout << "-S --short-connection use short connection.\n";
 }
 
 bool verify_variables() {
@@ -265,14 +271,15 @@ int main(int argc, char *argv[]) {
     free_option();
     return 1;
   }
+  mysql_library_init(0, NULL, NULL);
   main_sct();
-
+  mysql_library_end();
   free_option();
   return ret;
 }
 
 class Statistics {
- public:
+public:
   Statistics() {
     m_cnt.store(0);
     m_cnt_failed.store(0);
@@ -292,7 +299,7 @@ class Statistics {
 
   void increase_cnt_failed() { m_cnt_failed++; }
 
- private:
+private:
   std::atomic<uint64_t> m_cnt{0};
   std::atomic<uint64_t> m_cnt_failed{0};
 };
@@ -300,20 +307,22 @@ class Statistics {
 static Statistics state;
 
 class TestC {
- public:
+public:
   TestC(const char *db_name, string table_name, uint64_t times,
-        uint64_t table_size) {
+        uint64_t table_size, uint64_t thread_id) {
     m_db_name_ = db_name;
     m_table_name_ = table_name;
     m_times_ = times;
     m_table_size_ = table_size;
+    m_thread_id_ = thread_id;
   }
 
   int run();
   int cleanup();
 
- private:
+private:
   int conns_prepare();
+  void conns_close();
   int data_prepare();
   int test_select_after_insert(const uint64_t pk);
   int commit_conn_trx(MYSQL *conn);
@@ -325,17 +334,25 @@ class TestC {
   string m_table_name_;
   uint64_t m_times_;
   uint64_t m_table_size_;
+  uint64_t m_thread_id_;
 
   MYSQL *m_conn_rw_{nullptr};
   MYSQL *m_conn_ro_{nullptr};
 };
 
-void start_test(int thread_num) {
-  string table_name = table_name_prefix + std::to_string(thread_num);
-  TestC t(database, table_name, iterations, table_size);
+void start_test(int thread_id) {
+  if (detail_log) {
+    std::cout << "start thread: " << thread_id << std::endl;
+  }
+  string table_name = table_name_prefix + std::to_string(thread_id);
+  TestC t(database, table_name, iterations, table_size, thread_id);
   t.run();
   t.cleanup();
   active_threads--;
+
+  if (detail_log) {
+    std::cout << "stop thread: " << thread_id << std::endl;
+  }
   return;
 }
 
@@ -403,12 +420,25 @@ int TestC::data_prepare() {
   return res;
 }
 
+void TestC::conns_close() {
+  if (m_conn_rw_ != nullptr) {
+    mysql_close(m_conn_rw_);
+    m_conn_rw_ = nullptr;
+  }
+
+  if (m_conn_ro_ != nullptr) {
+    mysql_close(m_conn_ro_);
+    m_conn_ro_ = nullptr;
+  }
+}
+
 int TestC::conns_prepare() {
   int res = 0;
   do {
     // Connect to RW
-    m_conn_rw_ = mysql_init(nullptr);
+    m_conn_rw_ = mysql_init(0);
     if (m_conn_rw_ == nullptr) {
+      std::cerr << "Failed to init m_conn_rw_ " << std::endl;
       res = -1;
       break;
     }
@@ -423,8 +453,9 @@ int TestC::conns_prepare() {
     }
 
     // Connection to RO
-    m_conn_ro_ = mysql_init(nullptr);
+    m_conn_ro_ = mysql_init(0);
     if (m_conn_ro_ == nullptr) {
+      std::cerr << "Failed to init m_conn_ro_ " << std::endl;
       res = -1;
       break;
     }
@@ -438,10 +469,10 @@ int TestC::conns_prepare() {
       break;
     }
 
-    res = mysql_query(m_conn_ro_, "set session autocommit = 0");
-    if (res != 0) {
-      std::cout << "Failed to set session  autocommit = 0" << std::endl;
-    }
+    /* res = mysql_query(m_conn_ro_, "set session autocommit = 0"); */
+    /* if (res != 0) { */
+    /*   std::cout << "Failed to set session  autocommit = 0" << std::endl; */
+    /* } */
 
   } while (0);
 
@@ -607,13 +638,6 @@ int TestC::consistency_test(uint64_t pk, uint64_t old_value,
       }
     }
 
-    res = mysql_query(m_conn_ro_, "commit");
-    if (res != 0) {
-      std::cout << "Failed to commit,"
-                << ", errno: " << mysql_errno(m_conn_ro_)
-                << ", errmsg: " << mysql_error(m_conn_ro_);
-      break;
-    }
     if (failed) {
       res = -1;
     }
@@ -636,10 +660,18 @@ int TestC::run() {
     return -1;
   }
 
+  if (short_connection) {
+    conns_close();
+  }
+
   while (processed_times++ < iterations) {
+    if (short_connection) {
+      conns_prepare();
+    }
     state.increase_cnt_total();
     res = update(pk, old_val, new_val);
     if (res != 0) {
+      conns_close();
       return -1;
     }
 
@@ -651,8 +683,14 @@ int TestC::run() {
     if (res != 0) {
       state.increase_cnt_failed();
     }
+    if (short_connection) {
+      conns_close();
+    }
   }
 
+  if (detail_log) {
+    std::cout << "thread id: " << m_thread_id_ << " finish." << std::endl;
+  }
   return res;
 }
 

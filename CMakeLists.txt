@@ -7,4 +7,4 @@ set(CMAKE_CXX_STANDARD 11)
 
 set(SOURCE_FILES mysqlsct.cc)
 add_executable(mysqlsct ${SOURCE_FILES})
-target_link_libraries(mysqlsct ${MYSQL_LIB})
+target_link_libraries(mysqlsct ${MYSQL_LIB} pthread)
