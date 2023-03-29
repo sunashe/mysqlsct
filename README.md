@@ -2,6 +2,8 @@
 
  mysqlsct is a benchmark tool to test strict consistency read, supports MySQL MGR,PolarDB,Aurora,TiDB,etc
 
+ Another, mysqlsct support to test short connection mode with custom query.
+
 ## Get the source codes
 ```shell
 git clone https://github.com/sunashe/mysqlsct.git
@@ -31,7 +33,8 @@ mysqlsct \
 --concurrency=1 \
 --database=sct \
 --sc-gap-us=0 \
---report-interval=2
+--report-interval=2 \
+--test-mode=sct
 ```
 
 e.g. 
@@ -48,7 +51,8 @@ e.g.
 --concurrency=1 \
 --database=sct \
 --sc-gap-us=0 \
---report-interval=2
+--report-interval=2 \
+--test-mode=sct
 
 Input parameters: 
 host-rw: 127.0.0.1
@@ -89,7 +93,7 @@ Usage: mysqlsct [OPTIONS]
 -H      --host-ro       mysql RO node host.
 -D      --database      mysql database.
 -P      --port-rw       mysql RW node port.
--o      --port-ro       mysql RO node port.
+-O      --port-ro       mysql RO node port.
 -u      --user  mysql user.
 -p      --password      mysql password.
 -i      --iterations    number of times to run the tests.
@@ -99,4 +103,22 @@ Usage: mysqlsct [OPTIONS]
 -r      --report-interval       periodically report intermediate statistics with a specified interval in seconds.
 -k      --detail-log    print detail error log.
 -c      --concurrency   number of threads to use.
+-m      --test-mode     test mode. now support sct and shortct
+-R      --port          mysql port for shortct mode
+-o      --host          mysql host for shortct mode
+```
+
+To test short connection mode, you should ensure that the query in 'short_connection_querys.txt' can be executed correctly in the database.
+
+```
+mysqlsct \
+--host=127.0.0.1 \
+--port=3306 \
+--user=sunashe \
+--password=**** \
+--iterations=100000 \
+--concurrency=1 \
+--database=sct \
+--report-interval=2 \
+--test-mode=shortct
 ```
