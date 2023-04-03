@@ -19,6 +19,8 @@ using std::cout;
 using std::endl;
 using std::string;
 
+bool prepare_done{false};
+
 std::atomic<uint32_t> active_threads{0};
 std::atomic<uint64_t> processed_times{0};
 
@@ -27,6 +29,7 @@ static char *password = nullptr;
 static char *database = nullptr;
 std::string table_name_prefix = "sct";
 
+static char *create_table_query = nullptr;
 static char *host_ro = nullptr;
 static char *host_rw = nullptr;
 static uint port_rw = 0;
@@ -38,24 +41,40 @@ static uint64_t table_size = 1000;
 static uint64_t iterations = 100000;
 static uint64_t report_interval = 1; // s
 static uint detail_log = 0;
-static uint64_t sleep_after_sct_failed = 1000; // s
+static uint64_t sleep_after_sct_failed = 0; // s
 static uint select_after_insert = 0;
 static uint short_connection = 0;
-
-void usage();
-static const struct option long_options[] = {
-    {"version", 0, nullptr, 'v'},          {"help", 0, nullptr, '?'},
-    {"host-rw", 1, nullptr, 'h'},          {"host-ro", 1, nullptr, 'H'},
-    {"database", 1, nullptr, 'D'},         {"port-rw", 1, nullptr, 'P'},
-    {"port-ro", 1, nullptr, 'O'},          {"user", 1, nullptr, 'u'},
-    {"password", 1, nullptr, 'p'},         {"iterations", 1, nullptr, 'i'},
-    {"table-cnt", 1, nullptr, 'T'},        {"table-size", 1, nullptr, 't'},
-    {"sc-gap-us", 1, nullptr, 's'},        {"report-interval", 1, nullptr, 'r'},
-    {"detail-log", 1, nullptr, 'k'},       {"concurrency", 1, nullptr, 'c'},
-    {"short-connection", 1, nullptr, 'S'},
+static char *test_mode_str = nullptr;
+enum TestMode {
+  SHORT_CONNECT,
+  CONSISTENT,
 };
 
+TestMode test_mode{SHORT_CONNECT};
+
+void parse_test_mode() {
+  if (test_mode_str == nullptr) {
+    test_mode = CONSISTENT;
+  } else if (strcasecmp(test_mode_str, "SHORT_CONNECT") == 0) {
+    test_mode = SHORT_CONNECT;
+  } else if (strcasecmp(test_mode_str, "SHORT_CONNECT") == 0) {
+    test_mode = CONSISTENT;
+  }
+}
+
+void usage();
+
 void free_option() {
+  if (create_table_query != nullptr) {
+    free(create_table_query);
+    create_table_query = nullptr;
+  }
+  
+  if (test_mode_str != nullptr) {
+    free(test_mode_str);
+    test_mode_str = nullptr;
+  }
+
   if (host_rw != nullptr) {
     free(host_rw);
     host_rw = nullptr;
@@ -82,6 +101,19 @@ void free_option() {
   }
 }
 
+static const struct option long_options[] = {
+    {"version", 0, nullptr, 'v'},          {"help", 0, nullptr, '?'},
+    {"host-rw", 1, nullptr, 'h'},          {"host-ro", 1, nullptr, 'H'},
+    {"database", 1, nullptr, 'D'},         {"port-rw", 1, nullptr, 'P'},
+    {"port-ro", 1, nullptr, 'O'},          {"user", 1, nullptr, 'u'},
+    {"password", 1, nullptr, 'p'},         {"iterations", 1, nullptr, 'i'},
+    {"table-cnt", 1, nullptr, 'T'},        {"table-size", 1, nullptr, 't'},
+    {"sc-gap-us", 1, nullptr, 's'},        {"report-interval", 1, nullptr, 'r'},
+    {"detail-log", 1, nullptr, 'k'},       {"concurrency", 1, nullptr, 'c'},
+    {"short-connection", 1, nullptr, 'S'}, {"test-after-insert", 1, nullptr, 'E'},
+    {"create-table-query", 1, nullptr, 'A'}, {"test-mode", 1, nullptr, 'm'}
+};
+
 bool parse_option(int argc, char *argv[]) {
   int opt = 0;
   if (argc == 1) {
@@ -89,9 +121,17 @@ bool parse_option(int argc, char *argv[]) {
     return false;
   }
 
-  while ((opt = getopt_long(argc, argv, "?vH:h:D:P:O:i:T:t:s:r:u:p:c:k:S:",
+  while ((opt = getopt_long(argc, argv, "?vH:h:D:P:O:i:T:t:s:r:u:p:c:k:S:E:m:A",
                             long_options, nullptr)) != -1) {
     switch (opt) {
+      case 'm':
+        test_mode_str = strdup(optarg);
+        parse_test_mode();
+        break;
+    case 'A':
+      create_table_query = strdup(optarg);
+      break;
+
     case 'S':
       short_connection = atoi(optarg);
       break;
@@ -159,6 +199,10 @@ bool parse_option(int argc, char *argv[]) {
       detail_log = atoi(optarg);
       break;
 
+    case 'E':
+      select_after_insert = atoi(optarg);
+      break;
+
     default:
       cout << "parse argument failed" << endl;
       usage();
@@ -188,33 +232,38 @@ void usage() {
           "statistics with a specified interval in seconds.\n";
   cout << "-k	--detail-log	print detail error log.\n";
   cout << "-c	--concurrency	number of threads to use.\n";
-  cout << "-S --short-connection use short connection.\n";
+  cout << "-S   --short-connection use short connection.\n";
+  cout << "-E   --test-after-insert test RO after insert.\n";
 }
 
 bool verify_variables() {
   bool res = true;
-  cout << "Input parameters: " << endl;
-  cout << "host-rw: " << host_rw << endl;
-  cout << "host-ro: " << host_ro << endl;
-  cout << "database: " << database << endl;
-  cout << "port-rw: " << port_rw << endl;
-  cout << "port-ro: " << port_ro << endl;
-  cout << "user: " << user << endl;
-  cout << "password: " << password << endl;
-  cout << "iterations: " << iterations << endl;
-  cout << "table-cnt: " << table_cnt << endl;
-  cout << "table-size: " << table_size << endl;
-  cout << "sc-gap-us: " << sc_gap_us << endl;
-  cout << "report-interval: " << report_interval << endl;
-  cout << "detail-log: " << detail_log << endl;
-  cout << "concurrency: " << concurrency << endl;
+  if (test_mode == SHORT_CONNECT) {
+
+  } else {
+    cout << "Input parameters: " << endl;
+    cout << "host-rw: " << host_rw << endl;
+    cout << "host-ro: " << host_ro << endl;
+    cout << "database: " << database << endl;
+    cout << "port-rw: " << port_rw << endl;
+    cout << "port-ro: " << port_ro << endl;
+    cout << "user: " << user << endl;
+    cout << "password: " << password << endl;
+    cout << "iterations: " << iterations << endl;
+    cout << "table-cnt: " << table_cnt << endl;
+    cout << "table-size: " << table_size << endl;
+    cout << "sc-gap-us: " << sc_gap_us << endl;
+    cout << "report-interval: " << report_interval << endl;
+    cout << "detail-log: " << detail_log << endl;
+    cout << "concurrency: " << concurrency << endl;
+  }
   cout << "###########################################" << endl;
-  if (host_rw == nullptr) {
+  if (host_rw == nullptr && test_mode != SHORT_CONNECT) {
     std::cerr << "miss host_rw.\n";
     res = false;
   }
 
-  if (host_ro == nullptr) {
+  if (host_ro == nullptr && test_mode != SHORT_CONNECT) {
     std::cerr << "miss host_ro.\n";
     res = false;
   }
@@ -321,6 +370,7 @@ public:
   int cleanup();
 
 private:
+  int test_short_connection();
   int conns_prepare();
   void conns_close();
   int data_prepare();
@@ -432,6 +482,45 @@ void TestC::conns_close() {
   }
 }
 
+int TestC::test_short_connection() {
+  int res = 0;
+  do {
+    // Connect to RW
+    m_conn_rw_ = mysql_init(0);
+    if (m_conn_rw_ == nullptr) {
+      std::cerr << "Failed to init m_conn_rw_ " << std::endl;
+      res = -1;
+      break;
+    }
+
+    if (!mysql_real_connect(m_conn_rw_, host_rw, user, password, m_db_name_,
+                            port_rw, nullptr, 0)) {
+      std::cerr << "Failed to connect to RW."
+                << " errno: " << mysql_errno(m_conn_rw_)
+                << ",errmsg: " << mysql_error(m_conn_rw_) << std::endl;
+      res = -1;
+      break;
+    }
+    if (sc_gap_us != 0) {
+      usleep(sc_gap_us);
+    }
+
+    if (mysql_query(m_conn_rw_, "select 1") != 0) {
+      std::cerr << "Failed to execut query: select 1."
+                << " errno: " << mysql_errno(m_conn_rw_)
+                << ",errmsg: " << mysql_error(m_conn_rw_) << std::endl;
+      res = -1;
+    }
+
+    if (m_conn_rw_ != nullptr) {
+      mysql_close(m_conn_rw_);
+      m_conn_rw_ = nullptr;
+    }
+  } while (0);
+
+  return res;
+}
+
 int TestC::conns_prepare() {
   int res = 0;
   do {
@@ -496,8 +585,8 @@ int TestC::test_select_after_insert(const uint64_t pk) {
   MYSQL_RES *mysql_res = nullptr;
 
   do {
-    query =
-        "select * from " + m_table_name_ + " where id = " + std::to_string(pk);
+    query = "/* mysqlsct test after insert */ select * from " + m_table_name_ +
+            " where id = " + std::to_string(pk);
     res = mysql_query(m_conn_ro_, query.data());
     if (res != 0) {
       std::cout << "Failed to select after insert, sql: " << query
@@ -530,7 +619,7 @@ int TestC::test_select_after_insert(const uint64_t pk) {
     mysql_free_result(mysql_res);
   } while (0);
 
-  commit_conn_trx(m_conn_ro_);
+  // commit_conn_trx(m_conn_ro_);
   return res;
 }
 
@@ -602,7 +691,7 @@ int TestC::consistency_test(uint64_t pk, uint64_t old_value,
   uint64_t ro_val;
   bool failed = false;
   string query =
-      "select c1 from " + m_table_name_ + " where id = " + std::to_string(pk);
+      "/* mysqlsct test after update */ select c1 from " + m_table_name_ + " where id = " + std::to_string(pk);
   do {
     res = mysql_query(m_conn_ro_, query.data());
     if (res != 0) {
@@ -649,22 +738,36 @@ int TestC::consistency_test(uint64_t pk, uint64_t old_value,
 
 int TestC::run() {
   int res = 0;
-  uint64_t pk = 0;
-  uint64_t old_val = 0;
-  uint64_t new_val = 0;
-  if ((res = conns_prepare()) != 0) {
-    return -1;
+  if (test_mode != SHORT_CONNECT) {
+    if ((res = conns_prepare()) != 0) {
+      return -1;
+    }
   }
 
-  if ((res = data_prepare() != 0)) {
-    return -1;
+  if (create_table_query != nullptr) {
+    if ((res = data_prepare() != 0)) {
+      return -1;
+    }
   }
 
   if (short_connection) {
     conns_close();
   }
 
+  uint64_t pk = 0;
+  uint64_t old_val = 0;
+  uint64_t new_val = 0;
+
+
   while (processed_times++ < iterations) {
+    if (test_mode == SHORT_CONNECT) {
+      if (test_short_connection() == 0) {
+        state.increase_cnt_total();
+      } else {
+        state.increase_cnt_failed();
+      }
+      continue;
+    }
     if (short_connection) {
       conns_prepare();
     }
@@ -708,21 +811,26 @@ int TestC::cleanup() {
   return 0;
 }
 
-int main_sct() {
-  std::thread *ct_threads[concurrency];
-  for (uint thread_id = 0; thread_id < concurrency; thread_id++) {
-    ct_threads[thread_id] = new std::thread(start_test, thread_id);
-    active_threads++;
-  }
-
+void print_result_interval() {
   Statistics new_state;
   Statistics pre_state;
   pre_state = state;
-
   if (report_interval != 0) {
+    // waiting for thread prepare completed.
+    
     while (active_threads.load() != 0) {
       sleep(report_interval);
       new_state = state;
+      if (test_mode == SHORT_CONNECT) {
+      std::cout << "cd(connect/disconnect)ps: "
+                << (new_state.get_cnt_total() - pre_state.get_cnt_total()) /
+                       report_interval
+                << ", failed cdps: "
+                << (new_state.get_cnt_failed() - pre_state.get_cnt_failed()) /
+                       report_interval
+                << std::endl;
+        
+      } else {
       std::cout << "Strict consistency tps: "
                 << (new_state.get_cnt_total() - pre_state.get_cnt_total()) /
                        report_interval
@@ -730,16 +838,37 @@ int main_sct() {
                 << (new_state.get_cnt_failed() - pre_state.get_cnt_failed()) /
                        report_interval
                 << std::endl;
+
+      }
       pre_state = new_state;
     }
   }
+}
+
+void print_result_summarize() {
+  if (test_mode == SHORT_CONNECT) {
+    std::cout << "Test connection/disconnect cnt: " << state.get_cnt_total()
+              << ", failed cnt: " << state.get_cnt_failed() << std::endl;
+  } else {
+    std::cout << "Test strict consistency cnt: " << state.get_cnt_total()
+              << ", failed cnt: " << state.get_cnt_failed() << std::endl;
+  }
+}
+
+int main_sct() {
+  std::thread *ct_threads[concurrency];
+  for (uint thread_id = 0; thread_id < concurrency; thread_id++) {
+    ct_threads[thread_id] = new std::thread(start_test, thread_id);
+    active_threads++;
+  }
+  
+  print_result_interval();
 
   for (uint thread_id = 0; thread_id < concurrency; thread_id++) {
     ct_threads[thread_id]->join();
     delete ct_threads[thread_id];
   }
 
-  std::cout << "Test strict consistency cnt: " << state.get_cnt_total()
-            << ", failed cnt: " << state.get_cnt_failed() << std::endl;
+  print_result_summarize();
   return 0;
 }
