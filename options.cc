@@ -41,10 +41,25 @@ uint detail_log = 0;
 uint64_t sleep_after_sct_failed = 1000; // s
 uint select_after_insert = 0;
 uint short_connection = 0;
+uint64_t test_time = 60;
+uint64_t test_qps = 1000;
 
-// test_mode contains "sct", "shortct"
-char *test_mode = nullptr;
+// test_mode contains "sct", "shortct", "rqps"
+char *test_mode_str = nullptr;
 
+TestMode test_mode{CONSISTENT}; // defalut sct mode
+
+void parse_test_mode() {
+  if (test_mode_str == nullptr || strcasecmp(test_mode_str, "sct") == 0) {
+    test_mode = CONSISTENT;
+  } else if (strcasecmp(test_mode_str, "shortct") == 0) {
+    test_mode = SHORT_CONNECT;
+  } else if (strcasecmp(test_mode_str, "rqps") == 0) {
+    test_mode = REMAIN_QPS;
+  }
+}
+
+int flag = 0;
 static const struct option long_options[] = {
     {"version", 0, nullptr, 'v'},          {"help", 0, nullptr, '?'},
     {"host-rw", 1, nullptr, 'h'},          {"host-ro", 1, nullptr, 'H'},
@@ -55,9 +70,9 @@ static const struct option long_options[] = {
     {"sc-gap-us", 1, nullptr, 's'},        {"report-interval", 1, nullptr, 'r'},
     {"detail-log", 1, nullptr, 'k'},       {"concurrency", 1, nullptr, 'c'},
     {"short-connection", 1, nullptr, 'S'}, {"test-mode", 1, nullptr, 'm'},
-    {"port", 1, nullptr, 'R'}, {"host", 1, nullptr, 'o'},
+    {"port", 1, nullptr, 'R'},             {"host", 1, nullptr, 'o'},
+    {"test-time", 0, &flag, 1},            {"qps", 1, &flag, 2},
 };
-
 
 
 bool parse_option(int argc, char *argv[]) {
@@ -139,7 +154,8 @@ bool parse_option(int argc, char *argv[]) {
       break;
     
     case 'm':
-      test_mode = strdup(optarg);
+      test_mode_str = strdup(optarg);
+      parse_test_mode();
       break;
     
     case 'R':
@@ -149,6 +165,18 @@ bool parse_option(int argc, char *argv[]) {
     case 'o':
       host = strdup(optarg);
       break;
+
+    case 0: {
+      switch (flag) {
+        case 1 :
+          test_time = atoi(optarg);
+          break;
+        case 2 :
+          test_qps = atoi(optarg);
+          break;
+      }
+      break;
+    }
 
     default:
       cout << "parse argument failed" << endl;
@@ -180,7 +208,9 @@ void usage() {
   cout << "-k	--detail-log	print detail error log.\n";
   cout << "-c	--concurrency	number of threads to use.\n";
   cout << "-S --short-connection use short connection.\n";
-  cout << "-m --test-mode choose test mode";
+  cout << "-m --test-mode choose test mode\n";
+  cout << "--test-time the totol time in remain_qps mode\n";
+  cout << "--qps the qps you want to remain in test\n";
 }
 
 bool verify_variables() {
@@ -206,9 +236,11 @@ bool verify_variables() {
   cout << "concurrency: " << concurrency << endl;
   cout << "short-connection: " << short_connection << endl;
   cout << "test-mode: " << test_mode << endl;
+  cout << "test-time: " << test_time << endl;
+  cout << "test-qps" << test_qps << endl;
   cout << "###########################################" << endl;
 
-  if (strcmp(test_mode, "sct") == 0) {
+  if (test_mode == TestMode::CONSISTENT) {
     if (host_rw == nullptr) {
       std::cerr << "miss host_rw.\n";
       res = false;
@@ -223,7 +255,8 @@ bool verify_variables() {
       std::cerr << "miss port_rw.\n";
       res = false;
     }
-  } else if (strcmp(test_mode, "shortct") == 0) {
+  } else if (test_mode == TestMode::SHORT_CONNECT ||
+             test_mode == TestMode::REMAIN_QPS) {
     if (host == nullptr) {
       std::cerr << "miss host \n";
       res = false;
@@ -247,6 +280,11 @@ bool verify_variables() {
 }
 
 void free_option() {
+  if (test_mode_str != nullptr) {
+    free(test_mode_str);
+    test_mode_str = nullptr;
+  }
+
   if (host != nullptr) {
     free(host);
     host = nullptr;

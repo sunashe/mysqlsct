@@ -5,7 +5,8 @@
  * @Description  :
  */
 
-#include "short_connnect.h"
+#include "options.h"
+#include "short_connection.h"
 #include <atomic>
 #include <fstream>
 #include <iostream>
@@ -35,6 +36,7 @@ extern uint short_connection;
 extern std::string table_name_prefix;
 
 static std::atomic<uint32_t> active_threads{0};
+static Statistics state;
 
 int ShortConnnectionTest::conns_prepare() {
   int res = 0;
@@ -70,7 +72,11 @@ void ShortConnnectionTest::conns_close() {
 void ShortConnnectionTest::run(const std::vector<std::string> &querys) {
   while (m_times_++ < iterations) {
     conns_prepare();
-    basic_query(querys);
+    if (basic_query(querys) == 0) {
+      state.increase_cnt_total();
+    } else {
+      state.increase_cnt_failed();
+    }
     conns_close();
   }
 }
@@ -146,6 +152,31 @@ std::vector<std::string> get_querys_from_file() {
   return lines;
 }
 
+static void print_result_interval() {
+  Statistics new_state, pre_state;
+  pre_state = state;
+
+  if (report_interval != 0) {
+    while (active_threads.load() != 0) {
+      sleep(report_interval);
+      new_state = state;
+      std::cout << "cd(connect/disconnect)ps: "
+                << (new_state.get_cnt_total() - pre_state.get_cnt_total()) /
+                       report_interval;
+      std::cout << ", failed cdps: "
+                << (new_state.get_cnt_failed() - pre_state.get_cnt_failed()) /
+                       report_interval;
+      std::cout << ", active threads : " << active_threads.load() << std::endl;
+      pre_state = new_state;
+    }
+  }
+}
+
+static void print_result_summarize() {
+  std::cout << "Test connection/disconnect cnt: " << state.get_cnt_total()
+            << ", failed cnt: " << state.get_cnt_failed() << std::endl;
+}
+
 int main_shortct() {
   std::thread *ct_threads[concurrency];
   std::vector<std::string> querys = get_querys_from_file();
@@ -155,17 +186,14 @@ int main_shortct() {
     active_threads++;
   }
 
-  if (report_interval != 0) {
-    while (active_threads.load() != 0) {
-      sleep(report_interval);
-      std::cout << "active threads : " << active_threads.load() << std::endl;
-    }
-  }
+  print_result_interval();
 
   for (uint thread_id = 0; thread_id < concurrency; thread_id++) {
     ct_threads[thread_id]->join();
     delete ct_threads[thread_id];
   }
+
+  print_result_summarize();
 
   return 0;
 }
