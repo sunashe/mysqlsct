@@ -19,6 +19,7 @@
 using std::string;
 
 std::atomic<uint32_t> active_threads{0};
+std::atomic<uint32_t> running_threads{0};
 std::atomic<uint64_t> processed_times{0};
 
 extern char *user;
@@ -39,6 +40,7 @@ extern uint64_t sleep_after_sct_failed; // s
 extern uint select_after_insert;
 extern uint short_connection;
 extern std::string table_name_prefix;
+extern bool skip_prepare;
 
 extern char *test_mode;
 
@@ -473,13 +475,21 @@ int TestC::run() {
     return -1;
   }
 
-  if ((res = data_prepare() != 0)) {
-    return -1;
+  if (!skip_prepare){
+    if (detail_log) {
+      std::cout << "thread id: " << m_thread_id_ << " data preparing." << std::endl;
+    }
+
+    if ((res = data_prepare() != 0)) {
+      return -1;
+    }
   }
 
   if (short_connection) {
     conns_close();
   }
+
+  running_threads++;
 
   while (processed_times++ < iterations) {
     if (short_connection) {
@@ -504,6 +514,8 @@ int TestC::run() {
       conns_close();
     }
   }
+
+  running_threads--;
 
   if (detail_log) {
     std::cout << "thread id: " << m_thread_id_ << " finish." << std::endl;
@@ -539,15 +551,18 @@ int main_sct() {
   if (report_interval != 0) {
     while (active_threads.load() != 0) {
       sleep(report_interval);
-      new_state = state;
-      std::cout << "Strict consistency tps: "
-                << (new_state.get_cnt_total() - pre_state.get_cnt_total()) /
-                       report_interval
-                << ", failed tps: "
-                << (new_state.get_cnt_failed() - pre_state.get_cnt_failed()) /
-                       report_interval
-                << std::endl;
-      pre_state = new_state;
+
+      if (running_threads > 0) {
+        new_state = state;
+        std::cout << "Strict consistency tps: "
+                  << (new_state.get_cnt_total() - pre_state.get_cnt_total()) /
+                         report_interval
+                  << ", failed tps: "
+                  << (new_state.get_cnt_failed() - pre_state.get_cnt_failed()) /
+                         report_interval
+                  << std::endl;
+        pre_state = new_state;
+      }
     }
   }
 
