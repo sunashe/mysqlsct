@@ -1,7 +1,7 @@
 /*
  * @Date         : 2023-03-29 15:47:02
  * @Author       : huyutuo.hyt
- * @FilePath     : options.cc
+ * @FilePath: options.cc
  * @Description  : 
  */
 
@@ -24,6 +24,7 @@ char *user = nullptr;
 char *password = nullptr;
 char *database = nullptr;
 std::string table_name_prefix = "sct";
+std::string secondary_index_prefix = "sec_index";
 
 char *host_ro = nullptr;
 char *host_rw = nullptr;

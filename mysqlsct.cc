@@ -42,6 +42,7 @@ extern uint select_after_insert;
 extern uint short_connection;
 extern std::string table_name_prefix;
 extern bool skip_prepare;
+extern std::string secondary_index_prefix;
 
 extern TestMode test_mode;
 
@@ -110,6 +111,7 @@ public:
         uint64_t table_size, uint64_t thread_id) {
     m_db_name_ = db_name;
     m_table_name_ = table_name;
+    m_second_index_table_name_ = "sec_index" + m_table_name_;
     m_times_ = times;
     m_table_size_ = table_size;
     m_thread_id_ = thread_id;
@@ -127,6 +129,13 @@ private:
   int insert_test(uint64_t pk);
   int update(uint64_t &pk, uint64_t &old_value, uint64_t &new_value);
   int consistency_test(uint64_t pk, uint64_t old_value, uint64_t expected);
+
+  int secondary_index_data_prepare();
+  int secondary_index_update(uint64_t &sid, uint64_t &old_value,
+                             uint64_t &new_value);
+  int secondary_index_consistency_test(uint64_t sid, uint64_t old_value,
+                                       uint64_t expected);
+  string m_second_index_table_name_;
 
   const char *m_db_name_;
   string m_table_name_;
@@ -404,6 +413,10 @@ int TestC::consistency_test(uint64_t pk, uint64_t old_value,
   do {
     res = mysql_query(m_conn_ro_, query.data());
     if (res != 0) {
+      if (mysql_errno(m_conn_ro_) == 8017) {
+        res = 0;
+        break;
+      }
       std::cerr << "Failed to test consistency, sql: " << query
                 << ", errno: " << mysql_errno(m_conn_ro_)
                 << ", errmsg: " << mysql_error(m_conn_ro_);
@@ -450,6 +463,7 @@ int TestC::run() {
   uint64_t pk = 0;
   uint64_t old_val = 0;
   uint64_t new_val = 0;
+  uint is_secondary_index_test = 0;
   if ((res = conns_prepare()) != 0) {
     return -1;
   }
@@ -464,6 +478,10 @@ int TestC::run() {
     }
   }
 
+  if ((res = secondary_index_data_prepare() != 0)) {
+    return -1;
+  }
+
   if (short_connection) {
     conns_close();
   }
@@ -475,7 +493,16 @@ int TestC::run() {
       conns_prepare();
     }
     state.increase_cnt_total();
-    res = update(pk, old_val, new_val);
+
+    is_secondary_index_test = rand() % 2;
+
+    if (is_secondary_index_test) {
+      // update based sid
+      res = secondary_index_update(pk, old_val, new_val);
+    } else {
+      res = update(pk, old_val, new_val);
+    }
+
     if (res != 0) {
       conns_close();
       return -1;
@@ -485,7 +512,12 @@ int TestC::run() {
       usleep(sc_gap_us);
     }
 
-    res = consistency_test(pk, old_val, new_val);
+    if (is_secondary_index_test) {
+      res = secondary_index_consistency_test(pk, old_val, new_val);
+    } else {
+      res = consistency_test(pk, old_val, new_val);
+    }
+
     if (res != 0) {
       state.increase_cnt_failed();
     }
@@ -553,4 +585,172 @@ int main_sct() {
   std::cout << "Test strict consistency cnt: " << state.get_cnt_total()
             << ", failed cnt: " << state.get_cnt_failed() << std::endl;
   return 0;
+}
+
+int TestC::secondary_index_data_prepare() {
+  int res = 0;
+  string query = "drop table if exists " + m_second_index_table_name_;
+  res = mysql_query(m_conn_rw_, query.data());
+  if (res != 0) {
+    std::cout << "Failed to drop table, sql: " << query
+              << ", errno: " << mysql_errno(m_conn_rw_)
+              << ", errmsg: " << mysql_error(m_conn_rw_) << std::endl;
+  }
+
+  query = "create table " + m_second_index_table_name_ +
+          " (id  bigint  primary  key  not  null,"
+          "name  bigint, tag  bigint, sid  bigint,"
+          "UNIQUE  INDEX  sid(sid ASC));";
+
+  res = mysql_query(m_conn_rw_, query.data());
+  if (res != 0) {
+    std::cout << "Failed to create table, sql: " << query
+              << ", errno: " << mysql_errno(m_conn_rw_)
+              << ", errmsg: " << mysql_error(m_conn_rw_) << std::endl;
+  }
+
+  for (uint64_t pk = 1; pk <= m_table_size_; pk++) {
+    query = "insert into " + m_second_index_table_name_ + " values(" +
+            std::to_string(pk) + "," + "0, 0, " + std::to_string(pk) + ")";
+    res = mysql_query(m_conn_rw_, query.data());
+    if (res != 0) {
+      std::cout << "Failed to insert, sql: " << query
+                << ", errno: " << mysql_errno(m_conn_rw_)
+                << ", errmsg: " << mysql_error(m_conn_rw_) << std::endl;
+      return res;
+    }
+
+    if (res != 0) {
+      return res;
+    }
+  }
+
+  query = "select count(*) from " + m_second_index_table_name_;
+  res = mysql_query(m_conn_rw_, query.data());
+  if (res != 0) {
+    std::cout << "Failed to check the table size, errno: "
+              << mysql_errno(m_conn_rw_)
+              << ", errmsg: " << mysql_error(m_conn_rw_) << std::endl;
+    return res;
+  }
+  MYSQL_RES *mysql_res = nullptr;
+  MYSQL_ROW row;
+  mysql_res = mysql_store_result(m_conn_rw_);
+  row = mysql_fetch_row(mysql_res);
+  if (row[0] == nullptr) {
+    std::cout << "Failed to check the table size." << std::endl;
+  }
+  uint64_t table_size = strtoull(row[0], nullptr, 10);
+  if (table_size != m_table_size_) {
+    std::cout << "Failed to check the table size, "
+              << m_second_index_table_name_ << " should be: " << m_table_size_
+              << ", but " << table_size << std::endl;
+  }
+  mysql_free_result(mysql_res);
+
+  return res;
+}
+
+int TestC::secondary_index_update(uint64_t &sid, uint64_t &old_value,
+                                  uint64_t &new_value) {
+  int res = 0;
+  MYSQL_RES *mysql_res = nullptr;
+  MYSQL_ROW row;
+  string query;
+
+  sid = rand() % m_table_size_ + 1;
+  new_value = rand() % m_table_size_;
+
+  query = "select name from " + m_second_index_table_name_ +
+          " where sid = " + std::to_string(sid);
+
+  res = mysql_query(m_conn_rw_, query.data());
+  if (res != 0) {
+    std::cout << "Failed to test consistency, sql: " << query
+              << ", errno: " << mysql_errno(m_conn_rw_)
+              << ", errmsg: " << mysql_error(m_conn_rw_);
+    return -1;
+  }
+
+  mysql_res = mysql_store_result(m_conn_rw_);
+
+  row = mysql_fetch_row(mysql_res);
+  if (row == nullptr) {
+    if (detail_log) {
+      std::cerr << "RW row is nullptr, expected: " << std::endl;
+    }
+    res = -1;
+    return res;
+  }
+
+  old_value = strtoull(row[0], nullptr, 10);
+  mysql_free_result(mysql_res);
+
+  query = "update " + m_second_index_table_name_ +
+          " set name = " + std::to_string(new_value) +
+          " where sid = " + std::to_string(sid);
+
+  res = mysql_query(m_conn_rw_, query.data());
+  if (res != 0) {
+    std::cerr << "Failed to update, sql: " << query
+              << ", errno: " << mysql_errno(m_conn_rw_)
+              << ", error: " << mysql_error(m_conn_rw_);
+  }
+  return res;
+}
+
+int TestC::secondary_index_consistency_test(uint64_t sid, uint64_t old_value,
+                                            uint64_t expected) {
+  int res = 0;
+  MYSQL_RES *mysql_res = nullptr;
+  MYSQL_ROW row;
+  uint64_t ro_val;
+  bool failed = false;
+  string query = "select name from " + m_second_index_table_name_ +
+                 " where sid = " + std::to_string(sid);
+  do {
+    res = mysql_query(m_conn_ro_, query.data());
+    if (res != 0) {
+      if (mysql_errno(m_conn_ro_) == 8017) {
+        res = 0;
+        break;
+      }
+      std::cerr << "Failed to test consistency, sql: " << query
+                << ", errno: " << mysql_errno(m_conn_ro_)
+                << ", errmsg: " << mysql_error(m_conn_ro_);
+      break;
+    }
+
+    mysql_res = mysql_store_result(m_conn_ro_);
+
+    row = mysql_fetch_row(mysql_res);
+    if (row == nullptr) {
+      if (detail_log) {
+        std::cerr << "RO row is nullptr, expected: " << expected << std::endl;
+      }
+      res = -1;
+      break;
+    }
+    ro_val = strtoull(row[0], nullptr, 10);
+    mysql_free_result(mysql_res);
+    mysql_res = nullptr;
+    if (ro_val != expected) {
+      if (detail_log) {
+        std::cerr << "RO val: " << ro_val << ", expected: " << expected
+                  << ", RW old: " << old_value << ", query: " << query
+                  << std::endl;
+      }
+      failed = true;
+      res = -1;
+      if (sleep_after_sct_failed > 0) {
+        sleep(sleep_after_sct_failed);
+      }
+    }
+
+    if (failed) {
+      res = -1;
+    }
+
+  } while (0);
+  return res;
 }
