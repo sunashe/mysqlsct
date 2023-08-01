@@ -14,7 +14,8 @@
 #include <unistd.h>
 
 #include "options.h"
-#include "short_connnect.h"
+#include "remain_qps.h"
+#include "short_connection.h"
 
 using std::string;
 
@@ -40,7 +41,7 @@ extern uint select_after_insert;
 extern uint short_connection;
 extern std::string table_name_prefix;
 
-extern char *test_mode;
+extern TestMode test_mode;
 
 MYSQL *safe_connect(const char *host, const char *user, const char *password,
                     const char *db, unsigned int port, char *errmesg) {
@@ -82,10 +83,12 @@ int main(int argc, char *argv[]) {
     return 1;
   }
   mysql_library_init(0, NULL, NULL);
-  if (strcmp(test_mode, "sct") == 0) {
+  if (test_mode == TestMode::CONSISTENT) {
     main_sct();
-  } else if (strcmp(test_mode, "shortct") == 0) {
+  } else if (test_mode == TestMode::SHORT_CONNECT) {
     main_shortct();
+  } else if (test_mode == TestMode::REMAIN_QPS) {
+    main_remain_qps();
   } else {
     std::cout << "wrong mode : " << test_mode << std::endl;
   }
@@ -95,31 +98,7 @@ int main(int argc, char *argv[]) {
   return ret;
 }
 
-class Statistics {
-public:
-  Statistics() {
-    m_cnt.store(0);
-    m_cnt_failed.store(0);
-  }
-  ~Statistics() {}
 
-  void operator=(const Statistics &state) {
-    m_cnt.store(state.m_cnt.load());
-    m_cnt_failed.store(state.m_cnt_failed.load());
-  }
-
-  uint64_t get_cnt_total() { return m_cnt.load(); }
-
-  uint64_t get_cnt_failed() { return m_cnt_failed.load(); }
-
-  void increase_cnt_total() { m_cnt++; }
-
-  void increase_cnt_failed() { m_cnt_failed++; }
-
-private:
-  std::atomic<uint64_t> m_cnt{0};
-  std::atomic<uint64_t> m_cnt_failed{0};
-};
 
 static Statistics state;
 
