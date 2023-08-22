@@ -41,6 +41,7 @@ uint detail_log = 0;
 uint64_t sleep_after_sct_failed = 1000; // s
 uint select_after_insert = 0;
 uint short_connection = 0;
+bool skip_prepare = 0;
 uint64_t test_time = 60;
 uint64_t test_qps = 1000;
 
@@ -70,6 +71,8 @@ static const struct option long_options[] = {
     {"sc-gap-us", 1, nullptr, 's'},        {"report-interval", 1, nullptr, 'r'},
     {"detail-log", 1, nullptr, 'k'},       {"concurrency", 1, nullptr, 'c'},
     {"short-connection", 1, nullptr, 'S'}, {"test-mode", 1, nullptr, 'm'},
+    {"port", 1, nullptr, 'R'}, {"host", 1, nullptr, 'o'},
+    {"skip-prepare", 1, nullptr, 'K'},     {"sleep-after-fail", 1, nullptr, 'f'},
     {"port", 1, nullptr, 'R'},             {"host", 1, nullptr, 'o'},
     {"test-time", 0, &flag, 1},            {"qps", 1, &flag, 2},
 };
@@ -83,7 +86,7 @@ bool parse_option(int argc, char *argv[]) {
   }
 
   while (
-      (opt = getopt_long(argc, argv, "?vH:h:D:P:O:i:T:t:s:r:u:p:c:k:S:m:R:o:",
+      (opt = getopt_long(argc, argv, "?vH:h:D:P:O:i:T:t:s:r:u:p:c:k:S:m:R:o:K:f:",
                          long_options, nullptr)) != -1) {
     switch (opt) {
     case 'S':
@@ -166,6 +169,13 @@ bool parse_option(int argc, char *argv[]) {
       host = strdup(optarg);
       break;
 
+    case 'K':
+      skip_prepare = atoi(optarg) > 0 ? true : false;
+	  break;
+
+    case 'f':
+      sleep_after_sct_failed = atoi(optarg);
+	  break;
     case 0: {
       switch (flag) {
         case 1 :
@@ -207,8 +217,10 @@ void usage() {
           "statistics with a specified interval in seconds.\n";
   cout << "-k	--detail-log	print detail error log.\n";
   cout << "-c	--concurrency	number of threads to use.\n";
-  cout << "-S --short-connection use short connection.\n";
-  cout << "-m --test-mode choose test mode\n";
+  cout << "-S	--short-connection use short connection.\n";
+  cout << "-m	--test-mode choose test mode.\n";
+  cout << "-K	--skip-prepare skip data prepare.\n";
+  cout << "-f	--sleep-after_fail sleep ms after sct failed";
   cout << "--test-time the totol time in remain_qps mode\n";
   cout << "--qps the qps you want to remain in test\n";
 }
@@ -236,6 +248,8 @@ bool verify_variables() {
   cout << "concurrency: " << concurrency << endl;
   cout << "short-connection: " << short_connection << endl;
   cout << "test-mode: " << test_mode << endl;
+  cout << "skip-prepasre: " << skip_prepare << endl;
+  cout << "sleep-after_fail" << sleep_after_sct_failed << endl;
   cout << "test-time: " << test_time << endl;
   cout << "test-qps" << test_qps << endl;
   cout << "###########################################" << endl;

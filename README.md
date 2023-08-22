@@ -106,8 +106,10 @@ Usage: mysqlsct [OPTIONS]
 -m      --test-mode     test mode. now support sct and shortct
 -R      --port          mysql port for shortct mode
 -o      --host          mysql host for shortct mode
-        --qps           the qps you want to remain in test
-        --test-time     the totol time in remain_qps mode
+-K      --skip-prepare skip data prepare.
+-f      --sleep-after_fail sleep ms after sct failed
+--qps           the qps you want to remain in test
+--test-time     the totol time in remain_qps mode
 ```
 
 To test short connection mode, you should ensure that the query in 'short_connection_querys.txt' can be executed correctly in the database.
