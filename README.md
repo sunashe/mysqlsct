@@ -2,7 +2,7 @@
 
  mysqlsct is a benchmark tool to test strict consistency read, supports MySQL MGR,PolarDB,Aurora,TiDB,etc
 
- Another, mysqlsct support to test short connection mode with custom query.
+ Another, mysqlsct support to test short connection mode and remain qps mode with custom query.
 
 ## Get the source codes
 ```shell
@@ -108,6 +108,8 @@ Usage: mysqlsct [OPTIONS]
 -o      --host          mysql host for shortct mode
 -K      --skip-prepare skip data prepare.
 -f      --sleep-after_fail sleep ms after sct failed
+--qps           the qps you want to remain in test
+--test-time     the totol time in remain_qps mode
 ```
 
 To test short connection mode, you should ensure that the query in 'short_connection_querys.txt' can be executed correctly in the database.
@@ -123,4 +125,22 @@ mysqlsct \
 --database=sct \
 --report-interval=2 \
 --test-mode=shortct
+```
+
+To test remain qps mode, you should ensure that the query in 'short_connection_querys.txt' can be executed correctly in the database. 
+
+
+```
+mysqlsct \
+--host=127.0.0.1 \
+--port=3306 \
+--user=sunashe \
+--password=**** \
+--iterations=100000 \
+--concurrency=1 \
+--database=sct \
+--report-interval=2 \
+--qps=1000 \
+--test-time=60 \
+--test-mode=rqps
 ```
