@@ -45,32 +45,6 @@ extern bool skip_prepare;
 
 extern TestMode test_mode;
 
-MYSQL *safe_connect(const char *host, const char *user, const char *password,
-                    const char *db, unsigned int port, char *errmesg) {
-  MYSQL *conn;
-  conn = mysql_init(0);
-  unsigned int connection_timeout = 5;
-  mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, (char *)&connection_timeout);
-  if (!mysql_real_connect(conn, host, user, password, db, port, nullptr, 0)) {
-    sprintf(errmesg, "connect to %s:%d error %d,%s", host, port,
-            mysql_errno(conn), mysql_error(conn));
-    return nullptr;
-  }
-  return conn;
-}
-
-int safe_close(MYSQL *conn, char *errmesg) {
-  int ret = 0;
-  if (!conn) {
-    return ret;
-  }
-  mysql_free_result(mysql_store_result(conn));
-  if (mysql_ping(conn) == 0) {
-    mysql_close(conn);
-  }
-  return ret;
-}
-
 int main_sct();
 
 int main(int argc, char *argv[]) {
