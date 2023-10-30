@@ -43,6 +43,7 @@ extern uint short_connection;
 extern std::string table_name_prefix;
 extern bool skip_prepare;
 extern std::string secondary_index_prefix;
+extern uint64_t test_time;
 
 extern TestMode test_mode;
 
@@ -464,6 +465,10 @@ int TestC::run() {
   uint64_t old_val = 0;
   uint64_t new_val = 0;
   uint is_secondary_index_test = 0;
+
+  time_t start_time = time(NULL);
+  time_t end_time;
+
   if ((res = conns_prepare()) != 0) {
     return -1;
   }
@@ -524,6 +529,11 @@ int TestC::run() {
     if (short_connection) {
       conns_close();
     }
+
+    end_time = time(NULL);
+    uint64_t run_time = end_time - start_time;
+    if (run_time >= test_time)
+      break;
   }
 
   running_threads--;
