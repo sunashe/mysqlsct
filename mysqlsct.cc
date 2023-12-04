@@ -112,7 +112,6 @@ public:
         uint64_t table_size, uint64_t thread_id) {
     m_db_name_ = db_name;
     m_table_name_ = table_name;
-    m_second_index_table_name_ = "sec_index" + m_table_name_;
     m_times_ = times;
     m_table_size_ = table_size;
     m_thread_id_ = thread_id;
@@ -131,12 +130,14 @@ private:
   int update(uint64_t &pk, uint64_t &old_value, uint64_t &new_value);
   int consistency_test(uint64_t pk, uint64_t old_value, uint64_t expected);
 
-  int secondary_index_data_prepare();
-  int secondary_index_update(uint64_t &sid, uint64_t &old_value,
+  int secondary_index_update(uint64_t &u_index_num, uint64_t &old_value,
                              uint64_t &new_value);
-  int secondary_index_consistency_test(uint64_t sid, uint64_t old_value,
+  int secondary_index_consistency_test(uint64_t u_index_num, uint64_t old_value,
                                        uint64_t expected);
-  string m_second_index_table_name_;
+  
+  int secondary_index_range_count_update(uint64_t &index_num);
+  int secondary_index_range_count_consistency_test(uint64_t u_index_num,
+                                                   uint64_t expected);
 
   const char *m_db_name_;
   string m_table_name_;
@@ -175,7 +176,13 @@ int TestC::data_prepare() {
   }
 
   query = "create table " + m_table_name_ +
-          " (id bigint not null primary key, c1 bigint)";
+          " (id bigint not null primary key, "
+          "c1 bigint, "
+          "name bigint, "
+          "u_index_num bigint, "
+          "index_num bigint, "
+          "UNIQUE INDEX u_index_num(u_index_num ASC) USING BTREE, "
+          "INDEX index_num(index_num) USING BTREE)";
   res = mysql_query(m_conn_rw_, query.data());
   if (res != 0) {
     std::cout << "Failed to create table, sql: " << query
@@ -183,23 +190,32 @@ int TestC::data_prepare() {
               << ", errmsg: " << mysql_error(m_conn_rw_) << std::endl;
   }
 
-  for (uint64_t pk = 1; pk <= m_table_size_; pk++) {
-    query = "insert into " + m_table_name_ + " values(" + std::to_string(pk) +
-            "," + "0)";
-    res = mysql_query(m_conn_rw_, query.data());
-    if (res != 0) {
-      std::cout << "Failed to insert, sql: " << query
-                << ", errno: " << mysql_errno(m_conn_rw_)
-                << ", errmsg: " << mysql_error(m_conn_rw_) << std::endl;
-      return res;
-    }
+  int index_num_count = 1;
+  uint64_t pk = 1;
+  while (pk <= m_table_size_) {
+    // for unique index u_index_num, the u_index_num will be same with the primary key
+    // for index index_num, will repeat 10 times with the same index_num
 
-    if (select_after_insert) {
-      res = test_select_after_insert(pk);
+    for (int i = 0; i < 10 && pk <= m_table_size_; i++, pk++) {
+      query = "insert into " + m_table_name_ + " values(" + std::to_string(pk) +
+            "," + "0, 0, " + std::to_string(pk) + ", " +
+            std::to_string(index_num_count) + ");";
+      res = mysql_query(m_conn_rw_, query.data());
+      if (res != 0) {
+        std::cout << "Failed to insert, sql: " << query
+                  << ", errno: " << mysql_errno(m_conn_rw_)
+                  << ", errmsg: " << mysql_error(m_conn_rw_) << std::endl;
+        return res;
+      }
+
+      if (select_after_insert) {
+        res = test_select_after_insert(pk);
+      }
+      if (res != 0) {
+        return res;
+      }
     }
-    if (res != 0) {
-      return res;
-    }
+    index_num_count++;
   }
 
   query = "select count(*) from " + m_table_name_;
@@ -459,12 +475,20 @@ int TestC::consistency_test(uint64_t pk, uint64_t old_value,
   return res;
 }
 
+enum enum_sct_index_test_mode {
+  PRIMARY_KEY = 0,
+  UNIQUE_INDEX = 1,
+  INDEX_RAND_COUNT = 2
+};
+
+const int sct_index_test_mode_count = 3;
+
 int TestC::run() {
   int res = 0;
   uint64_t pk = 0;
   uint64_t old_val = 0;
   uint64_t new_val = 0;
-  uint is_secondary_index_test = 0;
+  enum_sct_index_test_mode sct_index_test_mode = PRIMARY_KEY;
 
   time_t start_time = time(NULL);
   time_t end_time;
@@ -483,10 +507,6 @@ int TestC::run() {
     }
   }
 
-  if ((res = secondary_index_data_prepare() != 0)) {
-    return -1;
-  }
-
   if (short_connection) {
     conns_close();
   }
@@ -499,13 +519,17 @@ int TestC::run() {
     }
     state.increase_cnt_total();
 
-    is_secondary_index_test = rand() % 2;
+    sct_index_test_mode =
+        static_cast<enum_sct_index_test_mode>(rand() % sct_index_test_mode_count);
 
-    if (is_secondary_index_test) {
-      // update based sid
+
+    if (sct_index_test_mode == PRIMARY_KEY) {
+      res = update(pk, old_val, new_val);
+    } else if (sct_index_test_mode == UNIQUE_INDEX) {
+      // update based u_index_num
       res = secondary_index_update(pk, old_val, new_val);
     } else {
-      res = update(pk, old_val, new_val);
+      res = secondary_index_range_count_update(pk);
     }
 
     if (res != 0) {
@@ -516,12 +540,15 @@ int TestC::run() {
     if (sc_gap_us != 0) {
       usleep(sc_gap_us);
     }
-
-    if (is_secondary_index_test) {
+    
+    if (sct_index_test_mode == PRIMARY_KEY) {
+      res = consistency_test(pk, old_val, new_val);
+    } else if (sct_index_test_mode == UNIQUE_INDEX) {
       res = secondary_index_consistency_test(pk, old_val, new_val);
     } else {
-      res = consistency_test(pk, old_val, new_val);
+      res = secondary_index_range_count_consistency_test(pk, 10);
     }
+
 
     if (res != 0) {
       state.increase_cnt_failed();
@@ -597,82 +624,18 @@ int main_sct() {
   return 0;
 }
 
-int TestC::secondary_index_data_prepare() {
-  int res = 0;
-  string query = "drop table if exists " + m_second_index_table_name_;
-  res = mysql_query(m_conn_rw_, query.data());
-  if (res != 0) {
-    std::cout << "Failed to drop table, sql: " << query
-              << ", errno: " << mysql_errno(m_conn_rw_)
-              << ", errmsg: " << mysql_error(m_conn_rw_) << std::endl;
-  }
-
-  query = "create table " + m_second_index_table_name_ +
-          " (id  bigint  primary  key  not  null,"
-          "name  bigint, tag  bigint, sid  bigint,"
-          "UNIQUE  INDEX  sid(sid ASC));";
-
-  res = mysql_query(m_conn_rw_, query.data());
-  if (res != 0) {
-    std::cout << "Failed to create table, sql: " << query
-              << ", errno: " << mysql_errno(m_conn_rw_)
-              << ", errmsg: " << mysql_error(m_conn_rw_) << std::endl;
-  }
-
-  for (uint64_t pk = 1; pk <= m_table_size_; pk++) {
-    query = "insert into " + m_second_index_table_name_ + " values(" +
-            std::to_string(pk) + "," + "0, 0, " + std::to_string(pk) + ")";
-    res = mysql_query(m_conn_rw_, query.data());
-    if (res != 0) {
-      std::cout << "Failed to insert, sql: " << query
-                << ", errno: " << mysql_errno(m_conn_rw_)
-                << ", errmsg: " << mysql_error(m_conn_rw_) << std::endl;
-      return res;
-    }
-
-    if (res != 0) {
-      return res;
-    }
-  }
-
-  query = "select count(*) from " + m_second_index_table_name_;
-  res = mysql_query(m_conn_rw_, query.data());
-  if (res != 0) {
-    std::cout << "Failed to check the table size, errno: "
-              << mysql_errno(m_conn_rw_)
-              << ", errmsg: " << mysql_error(m_conn_rw_) << std::endl;
-    return res;
-  }
-  MYSQL_RES *mysql_res = nullptr;
-  MYSQL_ROW row;
-  mysql_res = mysql_store_result(m_conn_rw_);
-  row = mysql_fetch_row(mysql_res);
-  if (row[0] == nullptr) {
-    std::cout << "Failed to check the table size." << std::endl;
-  }
-  uint64_t table_size = strtoull(row[0], nullptr, 10);
-  if (table_size != m_table_size_) {
-    std::cout << "Failed to check the table size, "
-              << m_second_index_table_name_ << " should be: " << m_table_size_
-              << ", but " << table_size << std::endl;
-  }
-  mysql_free_result(mysql_res);
-
-  return res;
-}
-
-int TestC::secondary_index_update(uint64_t &sid, uint64_t &old_value,
+int TestC::secondary_index_update(uint64_t &u_index_num, uint64_t &old_value,
                                   uint64_t &new_value) {
   int res = 0;
   MYSQL_RES *mysql_res = nullptr;
   MYSQL_ROW row;
   string query;
 
-  sid = rand() % m_table_size_ + 1;
+  u_index_num = rand() % m_table_size_ + 1;
   new_value = rand() % m_table_size_;
 
-  query = "select name from " + m_second_index_table_name_ +
-          " where sid = " + std::to_string(sid);
+  query = "select name from " + m_table_name_ +
+          " where u_index_num = " + std::to_string(u_index_num);
 
   res = mysql_query(m_conn_rw_, query.data());
   if (res != 0) {
@@ -696,9 +659,9 @@ int TestC::secondary_index_update(uint64_t &sid, uint64_t &old_value,
   old_value = strtoull(row[0], nullptr, 10);
   mysql_free_result(mysql_res);
 
-  query = "update " + m_second_index_table_name_ +
+  query = "update " + m_table_name_ +
           " set name = " + std::to_string(new_value) +
-          " where sid = " + std::to_string(sid);
+          " where u_index_num = " + std::to_string(u_index_num);
 
   res = mysql_query(m_conn_rw_, query.data());
   if (res != 0) {
@@ -709,15 +672,15 @@ int TestC::secondary_index_update(uint64_t &sid, uint64_t &old_value,
   return res;
 }
 
-int TestC::secondary_index_consistency_test(uint64_t sid, uint64_t old_value,
+int TestC::secondary_index_consistency_test(uint64_t u_index_num, uint64_t old_value,
                                             uint64_t expected) {
   int res = 0;
   MYSQL_RES *mysql_res = nullptr;
   MYSQL_ROW row;
   uint64_t ro_val;
   bool failed = false;
-  string query = "select name from " + m_second_index_table_name_ +
-                 " where sid = " + std::to_string(sid);
+  string query = "select name from " + m_table_name_ +
+                 " where u_index_num = " + std::to_string(u_index_num);
   do {
     res = mysql_query(m_conn_ro_, query.data());
     if (res != 0) {
@@ -749,6 +712,87 @@ int TestC::secondary_index_consistency_test(uint64_t sid, uint64_t old_value,
         std::cerr << "RO val: " << ro_val << ", expected: " << expected
                   << ", RW old: " << old_value << ", query: " << query
                   << std::endl;
+      }
+      failed = true;
+      res = -1;
+      if (sleep_after_sct_failed > 0) {
+        sleep(sleep_after_sct_failed);
+      }
+    }
+
+    if (failed) {
+      res = -1;
+    }
+
+  } while (0);
+  return res;
+}
+
+
+int TestC::secondary_index_range_count_update(uint64_t &index_num) {
+  int res = 0;
+  MYSQL_RES *mysql_res = nullptr;
+  MYSQL_ROW row;
+  string query;
+
+  index_num = rand() % (m_table_size_/10) + 1;
+
+  uint64_t update_key = (index_num - 1) * 10 + rand() % 10;
+
+  uint64_t rand_value = rand() % m_table_size_;
+
+  query = "update " + m_table_name_ +
+          " set name = " + std::to_string(rand_value) +
+          " where id = " + std::to_string(update_key);
+
+  res = mysql_query(m_conn_rw_, query.data());
+  if (res != 0) {
+    std::cerr << "Failed to update, sql: " << query
+              << ", errno: " << mysql_errno(m_conn_rw_)
+              << ", error: " << mysql_error(m_conn_rw_);
+  }
+  return res;
+}
+
+int TestC::secondary_index_range_count_consistency_test(uint64_t index_num,
+                                                        uint64_t expected) {
+  int res = 0;
+  MYSQL_RES *mysql_res = nullptr;
+  MYSQL_ROW row;
+  uint64_t ro_val;
+  bool failed = false;
+  string query = "select * from " + m_table_name_ +
+                 " where index_num = " + std::to_string(index_num);
+  do {
+    res = mysql_query(m_conn_ro_, query.data());
+    if (res != 0) {
+      if (mysql_errno(m_conn_ro_) == 8017) {
+        res = 0;
+        break;
+      }
+      std::cerr << "Failed to test consistency, sql: " << query
+                << ", errno: " << mysql_errno(m_conn_ro_)
+                << ", errmsg: " << mysql_error(m_conn_ro_);
+      break;
+    }
+
+    mysql_res = mysql_store_result(m_conn_ro_);
+
+    row = mysql_fetch_row(mysql_res);
+    if (row == nullptr) {
+      if (detail_log) {
+        std::cerr << "RO row is nullptr, expected: " << expected << std::endl;
+      }
+      res = -1;
+      break;
+    }
+    ro_val = mysql_num_rows(mysql_res);
+    mysql_free_result(mysql_res);
+    mysql_res = nullptr;
+    if (ro_val != expected) {
+      if (detail_log) {
+        std::cerr << "RO val: " << ro_val << ", expected: " << expected
+                  << ", query: " << query << std::endl;
       }
       failed = true;
       res = -1;
