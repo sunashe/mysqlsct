@@ -102,8 +102,6 @@ int main(int argc, char *argv[]) {
   return ret;
 }
 
-
-
 static Statistics state;
 
 class TestC {
@@ -134,8 +132,10 @@ private:
                              uint64_t &new_value);
   int secondary_index_consistency_test(uint64_t u_index_num, uint64_t old_value,
                                        uint64_t expected);
-  
-  int secondary_index_range_count_update(uint64_t &index_num);
+
+  int secondary_index_range_count_update(uint64_t &index_num,
+                                         uint64_t &old_value,
+                                         uint64_t &new_value);
   int secondary_index_range_count_consistency_test(uint64_t u_index_num,
                                                    uint64_t expected);
 
@@ -193,13 +193,14 @@ int TestC::data_prepare() {
   int index_num_count = 1;
   uint64_t pk = 1;
   while (pk <= m_table_size_) {
-    // for unique index u_index_num, the u_index_num will be same with the primary key
-    // for index index_num, will repeat 10 times with the same index_num
+    // for unique index u_index_num, the u_index_num will be same with the
+    // primary key for index index_num, will repeat 10 times with the same
+    // index_num
 
     for (int i = 0; i < 10 && pk <= m_table_size_; i++, pk++) {
       query = "insert into " + m_table_name_ + " values(" + std::to_string(pk) +
-            "," + "0, 0, " + std::to_string(pk) + ", " +
-            std::to_string(index_num_count) + ");";
+              "," + "0, 0, " + std::to_string(pk) + ", " +
+              std::to_string(index_num_count) + ");";
       res = mysql_query(m_conn_rw_, query.data());
       if (res != 0) {
         std::cout << "Failed to insert, sql: " << query
@@ -378,11 +379,25 @@ int TestC::update(uint64_t &pk, uint64_t &old_value, uint64_t &new_value) {
   MYSQL_ROW row;
   string query;
 
-  pk = rand() % m_table_size_ + 1;
   new_value = rand() % m_table_size_;
 
-  query =
-      "select c1 from " + m_table_name_ + " where id = " + std::to_string(pk);
+  // get max id
+  query = "select MAX(id) from " + m_table_name_;
+  res = mysql_query(m_conn_rw_, query.data());
+  mysql_res = mysql_store_result(m_conn_rw_);
+  row = mysql_fetch_row(mysql_res);
+  if (row == nullptr) {
+    std::cout << "get error when " << query.data() << ", may be the table "
+              << m_table_name_ << "is null";
+    res = -1;
+    return res;
+  }
+
+  uint64_t max_pk = strtoull(row[0], nullptr, 10);
+  pk = rand() % max_pk + 1;
+
+  query = "select id, c1 from " + m_table_name_ +
+          " where id >= " + std::to_string(pk) + " limit 1";
 
   res = mysql_query(m_conn_rw_, query.data());
   if (res != 0) {
@@ -403,7 +418,8 @@ int TestC::update(uint64_t &pk, uint64_t &old_value, uint64_t &new_value) {
     return res;
   }
 
-  old_value = strtoull(row[0], nullptr, 10);
+  pk = old_value = strtoull(row[0], nullptr, 10);
+  old_value = strtoull(row[1], nullptr, 10);
   mysql_free_result(mysql_res);
 
   query = "update " + m_table_name_ + " set c1 = " + std::to_string(new_value) +
@@ -519,9 +535,8 @@ int TestC::run() {
     }
     state.increase_cnt_total();
 
-    sct_index_test_mode =
-        static_cast<enum_sct_index_test_mode>(rand() % sct_index_test_mode_count);
-
+    sct_index_test_mode = static_cast<enum_sct_index_test_mode>(
+        rand() % (sct_index_test_mode_count));
 
     if (sct_index_test_mode == PRIMARY_KEY) {
       res = update(pk, old_val, new_val);
@@ -529,10 +544,11 @@ int TestC::run() {
       // update based u_index_num
       res = secondary_index_update(pk, old_val, new_val);
     } else {
-      res = secondary_index_range_count_update(pk);
+      res = secondary_index_range_count_update(pk, old_val, new_val);
     }
 
     if (res != 0) {
+      std::cout << ", test time" << test_time << std::endl;
       conns_close();
       return -1;
     }
@@ -540,15 +556,14 @@ int TestC::run() {
     if (sc_gap_us != 0) {
       usleep(sc_gap_us);
     }
-    
+
     if (sct_index_test_mode == PRIMARY_KEY) {
       res = consistency_test(pk, old_val, new_val);
     } else if (sct_index_test_mode == UNIQUE_INDEX) {
       res = secondary_index_consistency_test(pk, old_val, new_val);
     } else {
-      res = secondary_index_range_count_consistency_test(pk, 10);
+      res = secondary_index_range_count_consistency_test(pk, new_val);
     }
-
 
     if (res != 0) {
       state.increase_cnt_failed();
@@ -559,8 +574,9 @@ int TestC::run() {
 
     end_time = time(NULL);
     uint64_t run_time = end_time - start_time;
-    if (run_time >= test_time)
+    if (run_time >= test_time) {
       break;
+    }
   }
 
   running_threads--;
@@ -568,6 +584,7 @@ int TestC::run() {
   if (detail_log) {
     std::cout << "thread id: " << m_thread_id_ << " finish." << std::endl;
   }
+
   return res;
 }
 
@@ -621,6 +638,8 @@ int main_sct() {
 
   std::cout << "Test strict consistency cnt: " << state.get_cnt_total()
             << ", failed cnt: " << state.get_cnt_failed() << std::endl;
+
+  std::cout << processed_times++ << " " << iterations << std::endl;
   return 0;
 }
 
@@ -631,11 +650,25 @@ int TestC::secondary_index_update(uint64_t &u_index_num, uint64_t &old_value,
   MYSQL_ROW row;
   string query;
 
-  u_index_num = rand() % m_table_size_ + 1;
   new_value = rand() % m_table_size_;
 
-  query = "select name from " + m_table_name_ +
-          " where u_index_num = " + std::to_string(u_index_num);
+  // get max u_index_num
+  query = "select MAX(u_index_num) from " + m_table_name_;
+  res = mysql_query(m_conn_rw_, query.data());
+  mysql_res = mysql_store_result(m_conn_rw_);
+  row = mysql_fetch_row(mysql_res);
+  if (row == nullptr) {
+    std::cout << "get error when " << query.data() << ", may be the table "
+              << m_table_name_ << "is null";
+    res = -1;
+    return res;
+  }
+
+  uint64_t max_u_index_num = strtoull(row[0], nullptr, 10);
+  u_index_num = rand() % max_u_index_num + 1;
+
+  query = "select u_index_num, name from " + m_table_name_ +
+          " where u_index_num >= " + std::to_string(u_index_num) + " limit 1";
 
   res = mysql_query(m_conn_rw_, query.data());
   if (res != 0) {
@@ -656,7 +689,8 @@ int TestC::secondary_index_update(uint64_t &u_index_num, uint64_t &old_value,
     return res;
   }
 
-  old_value = strtoull(row[0], nullptr, 10);
+  u_index_num = strtoull(row[0], nullptr, 10);
+  old_value = strtoull(row[1], nullptr, 10);
   mysql_free_result(mysql_res);
 
   query = "update " + m_table_name_ +
@@ -672,7 +706,8 @@ int TestC::secondary_index_update(uint64_t &u_index_num, uint64_t &old_value,
   return res;
 }
 
-int TestC::secondary_index_consistency_test(uint64_t u_index_num, uint64_t old_value,
+int TestC::secondary_index_consistency_test(uint64_t u_index_num,
+                                            uint64_t old_value,
                                             uint64_t expected) {
   int res = 0;
   MYSQL_RES *mysql_res = nullptr;
@@ -728,22 +763,83 @@ int TestC::secondary_index_consistency_test(uint64_t u_index_num, uint64_t old_v
   return res;
 }
 
+enum enum_sct_index_range_test_mode { UPDATE = 0, ADD_OR_DELETE = 1 };
 
-int TestC::secondary_index_range_count_update(uint64_t &index_num) {
+const int sct_index_range_test_mode_count = 2;
+
+int TestC::secondary_index_range_count_update(uint64_t &index_num,
+                                              uint64_t &old_value,
+                                              uint64_t &new_value) {
   int res = 0;
   MYSQL_RES *mysql_res = nullptr;
   MYSQL_ROW row;
   string query;
+  enum_sct_index_range_test_mode sct_index_range_test_mode = UPDATE;
 
-  index_num = rand() % (m_table_size_/10) + 1;
+  // random update
+  index_num = rand() % (m_table_size_ / 10) + 1;
 
-  uint64_t update_key = (index_num - 1) * 10 + rand() % 10;
+  uint64_t update_key = (index_num - 1) * 10 + 1 + rand() % 10;
 
-  uint64_t rand_value = rand() % m_table_size_;
+  /// get old_value
+  query = "select count(*) from " + m_table_name_ +
+          " where index_num = " + std::to_string(index_num);
 
-  query = "update " + m_table_name_ +
-          " set name = " + std::to_string(rand_value) +
+  res = mysql_query(m_conn_rw_, query.data());
+  if (res != 0) {
+    std::cout << "Failed to test consistency, sql: " << query
+              << ", errno: " << mysql_errno(m_conn_rw_)
+              << ", errmsg: " << mysql_error(m_conn_rw_);
+    return -1;
+  }
+
+  mysql_res = mysql_store_result(m_conn_rw_);
+  row = mysql_fetch_row(mysql_res);
+  if (row == nullptr) {
+    if (detail_log) {
+      std::cerr << "RW row is nullptr, expected: " << std::endl;
+    }
+    res = -1;
+    return res;
+  }
+
+  old_value = strtoull(row[0], nullptr, 10);
+  // std::cout << "old value is " << old_value << std::endl;
+  mysql_free_result(mysql_res);
+
+  query = "select * from " + m_table_name_ +
           " where id = " + std::to_string(update_key);
+
+  res = mysql_query(m_conn_rw_, query.data());
+  mysql_res = mysql_store_result(m_conn_rw_);
+  row = mysql_fetch_row(mysql_res);
+
+  sct_index_range_test_mode = static_cast<enum_sct_index_range_test_mode>(
+      rand() % sct_index_range_test_mode_count);
+
+  if (row != nullptr) {
+    // for delete row test
+    if (sct_index_range_test_mode == ADD_OR_DELETE) {
+      query = "delete from " + m_table_name_ +
+              " where id = " + std::to_string(update_key);
+      new_value = old_value - 1;
+    } else {
+      // for update row test
+      uint64_t rand_value = rand() % m_table_size_;
+      query = "update " + m_table_name_ +
+              " set name = " + std::to_string(rand_value) +
+              " where id = " + std::to_string(update_key);
+      new_value = old_value;
+    }
+
+  } else {
+    // for insert row test
+    query = "insert into " + m_table_name_ + " values(" +
+            std::to_string(update_key) + "," + "0, 0, " +
+            std::to_string(update_key) + ", " + std::to_string(index_num) +
+            ");";
+    new_value = old_value + 1;
+  }
 
   res = mysql_query(m_conn_rw_, query.data());
   if (res != 0) {
@@ -780,6 +876,9 @@ int TestC::secondary_index_range_count_consistency_test(uint64_t index_num,
 
     row = mysql_fetch_row(mysql_res);
     if (row == nullptr) {
+      if (expected == 0) {
+        return 0;
+      }
       if (detail_log) {
         std::cerr << "RO row is nullptr, expected: " << expected << std::endl;
       }
