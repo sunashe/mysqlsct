@@ -75,6 +75,7 @@ static const struct option long_options[] = {
     {"skip-prepare", 1, nullptr, 'K'},     {"sleep-after-fail", 1, nullptr, 'f'},
     {"port", 1, nullptr, 'R'},             {"host", 1, nullptr, 'o'},
     {"test-time", 0, &flag, 1},            {"qps", 1, &flag, 2},
+    {nullptr, 0, nullptr, 0}
 };
 
 
@@ -220,7 +221,7 @@ void usage() {
   cout << "-S	--short-connection use short connection.\n";
   cout << "-m	--test-mode choose test mode.\n";
   cout << "-K	--skip-prepare skip data prepare.\n";
-  cout << "-f	--sleep-after_fail sleep ms after sct failed";
+  cout << "-f	--sleep-after-fail sleep ms after sct failed";
   cout << "--test-time the totol time in remain_qps mode\n";
   cout << "--qps the qps you want to remain in test\n";
 }
@@ -249,9 +250,9 @@ bool verify_variables() {
   cout << "short-connection: " << short_connection << endl;
   cout << "test-mode: " << test_mode << endl;
   cout << "skip-prepasre: " << skip_prepare << endl;
-  cout << "sleep-after_fail" << sleep_after_sct_failed << endl;
+  cout << "sleep-after-fail: " << sleep_after_sct_failed << endl;
   cout << "test-time: " << test_time << endl;
-  cout << "test-qps" << test_qps << endl;
+  cout << "test-qps: " << test_qps << endl;
   cout << "###########################################" << endl;
 
   if (test_mode == TestMode::CONSISTENT) {
