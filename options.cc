@@ -1,7 +1,7 @@
 /*
  * @Date         : 2023-03-29 15:47:02
  * @Author       : huyutuo.hyt
- * @FilePath     : options.cc
+ * @FilePath: options.cc
  * @Description  : 
  */
 
@@ -24,6 +24,7 @@ char *user = nullptr;
 char *password = nullptr;
 char *database = nullptr;
 std::string table_name_prefix = "sct";
+std::string secondary_index_prefix = "sec_index";
 
 char *host_ro = nullptr;
 char *host_rw = nullptr;
@@ -74,7 +75,7 @@ static const struct option long_options[] = {
     {"port", 1, nullptr, 'R'}, {"host", 1, nullptr, 'o'},
     {"skip-prepare", 1, nullptr, 'K'},     {"sleep-after-fail", 1, nullptr, 'f'},
     {"port", 1, nullptr, 'R'},             {"host", 1, nullptr, 'o'},
-    {"test-time", 0, &flag, 1},            {"qps", 1, &flag, 2},
+    {"test-time", 1, &flag, 1},            {"qps", 1, &flag, 2},
     {nullptr, 0, nullptr, 0}
 };
 
