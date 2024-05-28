@@ -1,3 +1,0 @@
-select * from user limit 1
-update user set a=100 where a=2
-update user set a=2 where a=100

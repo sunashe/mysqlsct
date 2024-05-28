@@ -16,8 +16,16 @@
 #include "options.h"
 #include "remain_qps.h"
 #include "short_connection.h"
+#include <time.h>
 
 using std::string;
+
+inline static uint64_t my_clock_monotonic() {
+  struct timespec tp;
+  while (clock_gettime(CLOCK_MONOTONIC, &tp) != 0) {
+  }
+  return (uint64_t)tp.tv_sec * 1000000000ULL + (uint64_t)tp.tv_nsec;
+}
 
 std::atomic<uint32_t> active_threads{0};
 std::atomic<uint32_t> running_threads{0};
@@ -136,6 +144,10 @@ private:
 
   MYSQL *m_conn_rw_{nullptr};
   MYSQL *m_conn_ro_{nullptr};
+  uint64_t update_start_ts{0};
+  uint64_t update_end_ts{0};
+  uint64_t select_start_ts{0};
+  uint64_t select_end_ts{0};
 };
 
 void start_test(int thread_id) {
@@ -401,14 +413,14 @@ int TestC::consistency_test(uint64_t pk, uint64_t old_value,
   bool failed = false;
   string query =
       "select c1 from " + m_table_name_ + " where id = " + std::to_string(pk);
+  select_start_ts = my_clock_monotonic();
   do {
+retry:
     res = mysql_query(m_conn_ro_, query.data());
     if (res != 0) {
-      std::cerr << "Failed to test consistency, sql: " << query
-                << ", errno: " << mysql_errno(m_conn_ro_)
-                << ", errmsg: " << mysql_error(m_conn_ro_);
-      break;
+      goto retry;
     }
+    select_end_ts = my_clock_monotonic();
 
     mysql_res = mysql_store_result(m_conn_ro_);
 
@@ -424,25 +436,19 @@ int TestC::consistency_test(uint64_t pk, uint64_t old_value,
     mysql_free_result(mysql_res);
     mysql_res = nullptr;
     if (ro_val != expected) {
-      if (detail_log) {
-        std::cerr << "RO val: " << ro_val << ", expected: " << expected
-                  << ", RW old: " << old_value << ", query: " << query
-                  << std::endl;
-      }
-      failed = true;
-      res = -1;
-      if (sleep_after_sct_failed > 0) {
-        sleep(sleep_after_sct_failed);
-      }
+      goto retry;
     }
 
-    if (failed) {
-      res = -1;
-    }
+    std::cout << "rw value: " << expected << ", ro value: " << ro_val
+              << ", update_start_ts: " << update_start_ts
+              << ", update_end_ts: " << update_end_ts
+              << ", select_start_ts: " << select_start_ts
+              << ", select_end_ts: " << select_end_ts
+              << ", delay(ns): " << (select_end_ts - select_start_ts) << std::endl;
 
-  } while (0);
+} while (0);
 
-  return res;
+return res;
 }
 
 int TestC::run() {
@@ -475,7 +481,9 @@ int TestC::run() {
       conns_prepare();
     }
     state.increase_cnt_total();
+    update_start_ts = my_clock_monotonic();
     res = update(pk, old_val, new_val);
+    update_end_ts = my_clock_monotonic();
     if (res != 0) {
       conns_close();
       return -1;
@@ -486,12 +494,14 @@ int TestC::run() {
     }
 
     res = consistency_test(pk, old_val, new_val);
+
     if (res != 0) {
       state.increase_cnt_failed();
     }
     if (short_connection) {
       conns_close();
     }
+    
   }
 
   running_threads--;
@@ -533,13 +543,13 @@ int main_sct() {
 
       if (running_threads > 0) {
         new_state = state;
-        std::cout << "Strict consistency tps: "
-                  << (new_state.get_cnt_total() - pre_state.get_cnt_total()) /
-                         report_interval
-                  << ", failed tps: "
-                  << (new_state.get_cnt_failed() - pre_state.get_cnt_failed()) /
-                         report_interval
-                  << std::endl;
+        /* std::cout << "Strict consistency tps: " */
+        /*           << (new_state.get_cnt_total() - pre_state.get_cnt_total()) / */
+        /*                  report_interval */
+        /*           << ", failed tps: " */
+        /*           << (new_state.get_cnt_failed() - pre_state.get_cnt_failed()) / */
+        /*                  report_interval */
+        /*           << std::endl; */
         pre_state = new_state;
       }
     }
@@ -550,7 +560,7 @@ int main_sct() {
     delete ct_threads[thread_id];
   }
 
-  std::cout << "Test strict consistency cnt: " << state.get_cnt_total()
-            << ", failed cnt: " << state.get_cnt_failed() << std::endl;
+  /* std::cout << "Test strict consistency cnt: " << state.get_cnt_total() */
+  /*           << ", failed cnt: " << state.get_cnt_failed() << std::endl; */
   return 0;
 }
