@@ -404,12 +404,23 @@ int TestC::update(uint64_t &pk, uint64_t &old_value, uint64_t &new_value) {
   return res;
 }
 
+/* std::atomic<uint64_t> max_delay{0}; */
+/* std::atomic<uint64_t> min_delay{0}; */
+/* std::atomic<uint64_t> avg_delay{0}; */
+
+// only one thread.
+uint64_t max_delay{0};
+uint64_t min_delay{0};
+uint64_t avg_delay{0};
+uint64_t total_delay{0};
+
 int TestC::consistency_test(uint64_t pk, uint64_t old_value,
                             uint64_t expected) {
   int res = 0;
   MYSQL_RES *mysql_res = nullptr;
   MYSQL_ROW row;
   uint64_t ro_val;
+  uint64_t current_delay = 0;
   bool failed = false;
   string query =
       "select c1 from " + m_table_name_ + " where id = " + std::to_string(pk);
@@ -439,13 +450,17 @@ retry:
       goto retry;
     }
 
+    current_delay = select_end_ts - select_start_ts;
+
     std::cout << "rw value: " << expected << ", ro value: " << ro_val
               << ", update_start_ts: " << update_start_ts
               << ", update_end_ts: " << update_end_ts
               << ", select_start_ts: " << select_start_ts
               << ", select_end_ts: " << select_end_ts
-              << ", delay(ns): " << (select_end_ts - select_start_ts) << std::endl;
-
+              << ", delay(ns): " << current_delay << std::endl;
+    max_delay = std::max(max_delay, current_delay);
+    min_delay = min_delay == 0 ? current_delay : std::min(current_delay, min_delay);
+    total_delay += current_delay;
 } while (0);
 
 return res;
@@ -527,6 +542,8 @@ int TestC::cleanup() {
 }
 
 int main_sct() {
+  // force to 1
+  concurrency = 1;
   std::thread *ct_threads[concurrency];
   for (uint thread_id = 0; thread_id < concurrency; thread_id++) {
     ct_threads[thread_id] = new std::thread(start_test, thread_id);
@@ -562,5 +579,6 @@ int main_sct() {
 
   /* std::cout << "Test strict consistency cnt: " << state.get_cnt_total() */
   /*           << ", failed cnt: " << state.get_cnt_failed() << std::endl; */
+  std::cout << "min_delay: " << min_delay << ", max_delay: " << max_delay << ", avg_delay: " << total_delay/iterations;
   return 0;
 }
