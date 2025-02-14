@@ -48,15 +48,20 @@ int ShortConnnectionTest::conns_prepare() {
       res = -1;
       break;
     }
-
+reconn:
     if (!mysql_real_connect(m_conn_, host, user, password, m_db_name_, port,
                             nullptr, 0)) {
+      while (conn_pool_.size() > 0) {
+        MYSQL *conn = *conn_pool_.begin();
+        conn_pool_.erase(conn_pool_.begin());
+        mysql_close(conn);
+      }
       std::cerr << "Failed to connect to MySql."
                 << " errno: " << mysql_errno(m_conn_)
                 << ",errmsg: " << mysql_error(m_conn_) << std::endl;
-      res = -1;
-      break;
+      goto reconn;
     }
+    conn_pool_.push_back(m_conn_);
   } while (0);
 
   return res;
@@ -77,7 +82,7 @@ void ShortConnnectionTest::run(const std::vector<std::string> &querys) {
     } else {
       state.increase_cnt_failed();
     }
-    conns_close();
+    // conns_close();
   }
 }
 
@@ -89,9 +94,9 @@ int ShortConnnectionTest::basic_query(const std::vector<std::string> &querys) {
   for (auto &query : querys) {
     res = mysql_query(m_conn_, query.data());
     if (res != 0) {
-      std::cout << "Failed to test consistency, sql: " << query
-                << ", errno: " << mysql_errno(m_conn_)
-                << ", errmsg: " << mysql_error(m_conn_);
+      // std::cout << "Failed to test consistency, sql: " << query
+      //           << ", errno: " << mysql_errno(m_conn_)
+      //           << ", errmsg: " << mysql_error(m_conn_);
       return -1;
     }
 

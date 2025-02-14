@@ -28,6 +28,7 @@ protected:
   void conns_close();
 
   MYSQL *m_conn_{nullptr};
+  std::vector<MYSQL *> conn_pool_;
   const char *m_db_name_;
   uint64_t m_times_;
 };
